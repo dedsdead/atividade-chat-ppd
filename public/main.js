@@ -1,9 +1,15 @@
 // Cria uma instancia do socket.io  para comunicação via websocket
 const socket = io();
 
-// Variaveis para armazenar o nome de usuario e a lista de usuarios conectados
-let userName = '';
-let userList = [];
+// Variaveis para armazenar o nome de usuario e o objeto com a lista de salas
+let username = '';
+let initialRoomName = '';
+let rooms = {
+    geral: [],
+    tads: [],
+    tga: [],
+    tmi: []
+};
 
 // Seleciona elementos HTML relevantes pelo ID
 let loginPage = document.querySelector('#loginPage');
@@ -11,19 +17,52 @@ let chatPage = document.querySelector('#chatPage');
 let loginInput = document.querySelector('#loginNameInput');
 let textInput = document.querySelector('#chatTextInput');
 
-// Define a exibição inivial das paginas
+// Define a exibição inicial das paginas
 loginPage.style.display = 'flex';
 chatPage.style.display = 'none';
 
 // Função para renderizar a lista de usuarios na interface
 function renderUserList() {
     let ul = document.querySelector('.userList');
-    ul.innerHTML = '';
+    ul.innerHTML = '<h1>Usuarios: </h1><br>';
 
     // Percorre a lista de usuarios e adiciona cada um como um item de lista HTML
-    userList.forEach(i => {
-        ul.innerHTML += '<li>' + i + '</li>';
+    for(const [key, values] of Object.entries(rooms)){
+        if(key === initialRoomName){
+            values.forEach(user => {
+                if(values.indexOf(user) % 2 == 0) {
+                    ul.innerHTML += '<li>' + user.username + '</li>';
+                } else {
+                    ul.innerHTML += '<li class= "odd">' + user.username + '</li>';
+                }
+            });
+        }
+    }
+}
+
+// Define a função para renderizar a lista de salas
+function renderRoomList() {
+    let ul = document.querySelector('.roomList');
+    ul.innerHTML = '<h1>Salas: </h1><br>';
+
+    // Percorre a lista de usuarios e adiciona cada um como um item de lista HTML
+    Object.keys(rooms).forEach(i => {
+        if(i == initialRoomName){
+            ul.innerHTML += '<li class= "here"><input type= "button" id= "room" value= "' + i + '" onclick= "enterRoom(this.value)"/></li>';
+        } else {
+            ul.innerHTML += '<li><input type= "button" id= "room" value= "' + i + '" onclick= "enterRoom(this.value)"/></li>';
+        }
+        
     });
+}
+
+function enterRoom(roomName) {
+    if(initialRoomName != roomName) {
+        if (initialRoomName != '') {
+            socket.emit('leave-room', initialRoomName);
+        }
+        socket.emit('join-room', {room: roomName, user: username});
+    }
 }
 
 // Função para adicionar uma mensagem a janela de chat
@@ -37,10 +76,10 @@ function addMessage(type, user, msg) {
             break;
     
         case 'msg':
-            if (username == user) {
-                ul.innerHTML += '<li class= "m-txt"><span class="me">' + user + '</span>' + msg + '</li>';
+            if (username === user) {
+                ul.innerHTML += '<li class= "m-txt"><span class="me">' + user + ": " + '</span>' + msg + '</li>';
             } else {
-                ul.innerHTML += '<li class= "m-txt"><span>' + user + '</span>' + msg + '</li>';
+                ul.innerHTML += '<li class= "m-txt"><span>' + user + ": " + '</span>' + msg + '</li>';
             }
             break;
     }
@@ -51,7 +90,7 @@ function addMessage(type, user, msg) {
 
 // Event listener para o campo de entrada de nome de usuario no formulario de login
 loginInput.addEventListener('keyup', (e) => {
-    if (e.keyCode === 13) {
+    if (e.keyCode == 13) {
         let name = loginInput.value.trim();
         if (name != '') {
             username = name;
@@ -65,46 +104,54 @@ loginInput.addEventListener('keyup', (e) => {
 
 // Event listener para o campo de entrada de texto na janela de chat
 textInput.addEventListener('keyup', (e) => {
-    if (e.keyCode === 13) {
+    if (e.keyCode == 13) {
         let txt = textInput.value.trim();
         textInput.value = '';
 
         if (txt != '') {
             // Adiciona a mensagem à janela de chat e envia por websocket
             addMessage('msg', username, txt);
-            socket.emit('send-msg', txt);
+            socket.emit('send-msg', txt, initialRoomName);
         }
     }
 });
 
-// Eventos socket.io para lidar com mensagens do servidor
-
-// Quando o servidor confirma que o usuario se conectou com sucesso
-socket.on('user-ok', (list) => {
+// Quando o servidor confirma que o usuario se enttrou na sala com sucesso
+socket.on('user-joined', (data) => {
     loginPage.style.display = 'none';
     chatPage.style.display = 'flex';
     textInput.focus();
 
     // Adiciona uma mensagem de status à janela de chat
-    addMessage('status', null, 'Conectado!');
+    addMessage('status', null, 'Entrou!');
 
     // Atualiza a lista de ususários e exibe na interface
-    userList = list;
+    rooms = data.list;
+    initialRoomName = data.name;
+    renderRoomList();
     renderUserList();
 });
 
-// Quando o servidor envia uma atualização da lista de usuários
-socket.on('list-update', (data) => {
+// Quando o servidor envia uma atualização da lista de salas
+socket.on('room-update', (data) => {
+    // Atualiza a lista de salas e exibe na interface
+    rooms = data.list;
+    renderRoomList();
+
     if(data.joined){
-        addMessage('status', null, data.joined + ' entrou no chat.');
+        addMessage('status', null, data.joined + ' entrou na sala ' + data.name);
+        // Atualiza a lista de usuarios e exibe na interface
+        renderUserList();
     }
     if (data.left){
-        addMessage('status', null, data.left + ' saiu do chat.');
+        addMessage('status', null, data.left + ' saiu da sala ' + data.name);
+        // Atualiza a lista de usuarios e exibe na interface
+        renderUserList();
     }
-
-    // Atualiza a lista de usuários e exibe na interface
-    userList = data.list;
-    renderUserList();
+    if(data.disconnected) {
+        addMessage('status', null, data.disconnected + ' foi desconectado da sala');
+    }
+    
 });
 
 // Quando o servidor envia uma mensagem de chat
@@ -116,8 +163,13 @@ socket.on('show-msg', (data) => {
 // Quando a conexão com o servidor é encerrada
 socket.on('disconnect', () => {
     addMessage('status', null, 'Você foi desconectado!');
-    userList = [];
-    renderUserList();
+    rooms = {
+        geral: [],
+        tads: [],
+        tga: [],
+        tmi: []
+    };
+    renderRoomList();
 });
 
 // Quando ocorre um erro de reconexão com o servidor
@@ -131,6 +183,6 @@ socket.on('reconnect', () => {
 
     if (username != '') {
         // Se um nome de usuário estiver definido, envia uma solicitação de ingresso novamente
-        socket.emit('join-request', username);
+        socket.emit('join-room', initialRoomName);
     }
 });
